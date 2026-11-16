@@ -123,7 +123,7 @@ it.each(['clear', 'revoke'] as const)(
       started = resolve
     })
     const transport: typeof fetch = async (_input, init) =>
-      new Promise((_resolve, reject) => {
+      new Promise<Response>((_resolve, reject) => {
         init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })
         started()
       })
