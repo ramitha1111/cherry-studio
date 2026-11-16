@@ -17,7 +17,7 @@ export async function memoryTarget(absolutePath: string): Promise<MemoryTarget |
   const shared = application.getPath('feature.memory.data')
   const agents = application.getPath('feature.agents.data')
   const backups = application.getPath('feature.memory.backups')
-  const roots = [shared, agents, backups]
+  const roots = [shared, agents, backups, application.getPath('app.temp')]
   const realRoots = await Promise.all(roots.map((root) => canonicalizePathForContainment(root, { allowMissing: true })))
   const realTarget = await canonicalizePathForContainment(absolutePath, { allowMissing: true })
   for (const candidate of [absolutePath, realTarget]) {
@@ -27,6 +27,11 @@ export async function memoryTarget(absolutePath: string): Promise<MemoryTarget |
         if (!root || (candidate !== root && !isPathInside(candidate, root))) continue
         if (index === 2) throw new Error('Memory recovery backups are not available to conversation tools')
         const parts = path.relative(root, candidate).split(path.sep)
+        if (index === 3) {
+          if (/^cherry-memory-native-[a-z\d]+$/i.test(parts[0] ?? ''))
+            throw new Error('Memory working copies are internal; use the original memory path')
+          continue
+        }
         const agentId = index === 1 ? parts.shift() : undefined
         if (index === 1 && !/^(?:MEMORY\.md|\.memories|memory)$/i.test(parts[0] ?? '')) continue
         const target = parts.join('/')
@@ -44,7 +49,8 @@ export async function memorySearchTarget(directory: string): Promise<boolean> {
   const roots = [
     application.getPath('feature.memory.data'),
     application.getPath('feature.agents.data'),
-    application.getPath('feature.memory.backups')
+    application.getPath('feature.memory.backups'),
+    application.getPath('app.temp')
   ]
   const realRoots = await Promise.all(roots.map((root) => canonicalizePathForContainment(root, { allowMissing: true })))
   const realDirectory = await canonicalizePathForContainment(directory, { allowMissing: true })
@@ -55,8 +61,12 @@ export async function memorySearchTarget(directory: string): Promise<boolean> {
         if (!root) continue
         if (path.relative(candidate, root) === '' || isPathInside(root, candidate)) return true
         if (!isPathInside(candidate, root)) continue
-        if (index !== 1) return true
         const parts = path.relative(root, candidate).split(path.sep)
+        if (index === 3) {
+          if (/^cherry-memory-native-[a-z\d]+$/i.test(parts[0] ?? '')) return true
+          continue
+        }
+        if (index !== 1) return true
         if (parts.length === 1 || /^(?:MEMORY\.md|\.memories|memory)$/i.test(parts[1] ?? '')) return true
       }
     }

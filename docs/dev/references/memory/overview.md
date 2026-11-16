@@ -55,7 +55,7 @@ Private memory follows the Agent across sessions and working directories. Projec
 
 Main derives identity and scope from the live conversation and stored entity configuration. Disabling access invalidates existing grants and pending work. Re-enabling access requires fresh grants.
 
-Pi and Claude Code have explicit entry-loading and runtime-guard integrations. Pi also supports controlled native file writes.
+Pi and Claude Code have explicit entry-loading and runtime-guard integrations. Both support controlled native file reads and writes.
 
 ## Settings and the existing Agent memory tab
 
@@ -154,7 +154,11 @@ Inference runs outside the write lock. Commit rechecks all input receipts, versi
 
 Pi's native `read`, `write` and `edit` route managed targets through `MemoryService`. A full read produces a caller-bound receipt. Saving binds that receipt to the exact approved proposal and checks for concurrent changes. A new file requires a confirmed missing-file baseline.
 
-Claude Code's native file hooks reject managed targets. The identity-free filesystem MCP and Pi's optional grep/find/ls also reject managed targets and related directory operations. Native managed-file access is currently provided through Pi's controlled `read`, `write` and `edit`.
+Claude Code keeps its native `Read`, `Write` and `Edit` tools and their parameters. Authorized calls operate on session-owned working copies; `MemoryService` commits the final content after approval and version checks. Existing files require a complete read in the current turn. New files bind a missing-file baseline internally. Overlapping operations on one file return a retryable conflict. Working copies are removed when the turn or session ends.
+
+The SDK's post-tool output rewrite preserves native output schemas. If the managed save is unconfirmed, the native result remains attributed to the working copy, an explicit failure notice stops the turn, and Cherry displays the call as failed. Replay also recognizes these scratch-only results. Only confirmed saves rewrite the result to the managed path. A failed read validation replaces the returned body instead of exposing invalidated content.
+
+Other uncontrolled Claude Code file operations, the identity-free filesystem MCP, and Pi's optional grep/find/ls continue to reject managed targets and related directory operations.
 
 Before a controlled change, the store validates paths and versions, creates a backup, writes a complete temporary file and replaces the target. Backup failure prevents the change. Shell, scripts, external editors and other direct disk access are outside this protection.
 

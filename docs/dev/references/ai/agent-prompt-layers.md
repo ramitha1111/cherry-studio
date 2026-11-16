@@ -110,8 +110,9 @@ the shared entry snapshot in `prepareStep`, after the context-compaction hooks. 
 Responses endpoints, Cherry's generated `instructions` mirror is refreshed too.
 The reference does not grant controlled file tools or confirm a save. Pi's
 separate native adapter provides full memory reads and receipt-bound writes and
-edits. Claude Code remains entry-only for managed memory: its native file guard
-rejects those targets because a pre-tool hook cannot own the complete commit.
+edits. Claude Code adapts native Read, Write and Edit through working copies and
+MemoryService commits, retaining read receipts in Main. Its native file guard
+rejects uncontrolled access to managed files, working copies and backups.
 Private memory is activated only after FACT migration checks preservation and
 records completion. Warm connections withdraw the old facts snapshot after cutover.
 

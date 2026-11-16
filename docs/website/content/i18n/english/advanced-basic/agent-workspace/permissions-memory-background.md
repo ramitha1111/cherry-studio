@@ -54,7 +54,7 @@ You can also tell the Agent directly in **Work**:
 Remember: All externally published Chinese copy must use full-width punctuation and avoid exaggerated titles. Apply this rule to all future related tasks.
 ```
 
-When correcting information, identify the old fact and what changed. Automatic extraction preserves existing facts when conflicts arise. Pi also supports memory-file writes with permission and version checks; check the tool result to confirm a save.
+When correcting information, identify the old fact and what changed. Automatic extraction preserves existing facts when conflicts arise. Pi and Claude Code also support memory-file writes through native file tools, with permission and version checks. Check the tool result to confirm a save; if saving is unconfirmed, read the file again before editing.
 
 #### When Saved Information Takes Effect
 
