@@ -1358,6 +1358,7 @@
   "common.language": "Idioma",
   "common.link.copy": "Copiar enlace",
   "common.link.open_browser": "Abrir en el navegador integrado",
+  "common.load_failed": "Error al cargar",
   "common.loading": "Cargando...",
   "common.maximize": "Maximizar",
   "common.minimize": "Minimizar",
