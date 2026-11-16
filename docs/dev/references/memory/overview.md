@@ -128,7 +128,7 @@ The currently answered user message is excluded by its message ID, derived from 
 |---|---|
 | Calls per answer | Four, shared by search and message expansion |
 | Query | Focused keywords, up to 512 characters |
-| Ranking | Trigram MATCH/BM25; escaped LIKE when all terms are short |
+| Ranking | Any keyword can match. Long-only queries use trigram MATCH/BM25. Queries containing short terms combine MATCH and escaped LIKE, rank by distinct matched terms, then prefer shorter messages and recency |
 | Candidates and hits | Up to 64 candidates from successful user messages; first six eligible matches |
 | Automatic context | Only the first hit: up to five messages before/after it, plus first/last three messages of its branch |
 | Returned excerpts | Deduplicated by message ID, at most 22, including successful user and Assistant text |

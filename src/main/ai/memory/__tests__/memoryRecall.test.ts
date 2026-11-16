@@ -190,6 +190,45 @@ describe('FTS conversation recall in memory references', () => {
   }
 
   it.each(['assistant', 'agent'] as const)(
+    'ranks partial short-keyword %s matches by coverage before the candidate limit',
+    async (kind) => {
+      const relevant = history(kind, '研究方向')
+      const table = kind === 'assistant' ? messageTable : agentSessionMessageTable
+      dbh.db
+        .update(table)
+        .set({ createdAt: Date.UTC(2025, 0, 1) })
+        .where(eq(table.id, relevant.message))
+        .run()
+      for (let i = 0; i < 65; i++) history(kind, `研究${i}`)
+      const unrelated = history(kind, 'weather forecast')
+
+      for (const query of ['研究 方向 论文 科研', '研究 研究 方向 论文 科研']) {
+        const items = excerpts(await recall(kind, query))
+        expect(items.find((item) => item.matchRank === 1)?.messageId).toBe(relevant.message)
+        expect(items.filter((item) => item.matchRank)).toHaveLength(6)
+        expect(items.map((item) => item.messageId)).not.toContain(unrelated.message)
+      }
+    }
+  )
+
+  it.each(['assistant', 'agent'] as const)(
+    'ranks mixed %s queries without dropping short-only or long-only matches',
+    async (kind) => {
+      const both = history(kind, 'AI Go 大模型 项目')
+      const shortOnly = history(kind, 'AI Go')
+      const longOnly = history(kind, '大模型')
+      const unrelated = history(kind, 'weather forecast')
+      const items = excerpts(await recall(kind, 'AI 大模型 Go 编程 项目 技术'))
+      expect(items.filter((item) => item.matchRank).map((item) => item.messageId)).toEqual([
+        both.message,
+        shortOnly.message,
+        longOnly.message
+      ])
+      expect(items.map((item) => item.messageId)).not.toContain(unrelated.message)
+    }
+  )
+
+  it.each(['assistant', 'agent'] as const)(
     'excludes the current %s question from keyword hits and expanded context',
     async (kind) => {
       const source = conversation(kind, [
@@ -360,7 +399,7 @@ describe('FTS conversation recall in memory references', () => {
   it.each(['assistant', 'agent'] as const)(
     'excludes other owners, disabled callers and deleted %s conversations',
     async (kind) => {
-      const source = history(kind, 'car PRIVATE_DATE')
+      const source = history(kind, 'car AI PRIVATE_DATE')
       const otherOwner = randomUUID()
       if (kind === 'assistant') {
         dbh.db
@@ -382,6 +421,7 @@ describe('FTS conversation recall in memory references', () => {
         dbh.db.update(agentSessionTable).set({ agentId: otherOwner }).where(eq(agentSessionTable.id, source.id)).run()
       }
       expect(await recall(kind, 'car')).not.toContain('PRIVATE_DATE')
+      expect(await recall(kind, 'AI absentlongterm')).not.toContain('PRIVATE_DATE')
       if (kind === 'assistant') {
         dbh.db.update(topicTable).set({ assistantId, deletedAt: Date.now() }).where(eq(topicTable.id, source.id)).run()
       } else {
@@ -392,6 +432,7 @@ describe('FTS conversation recall in memory references', () => {
           .run()
       }
       expect(await recall(kind, 'car')).not.toContain('PRIVATE_DATE')
+      expect(await recall(kind, 'AI absentlongterm')).not.toContain('PRIVATE_DATE')
       history(kind, 'car DISABLED_DATE')
       if (kind === 'assistant')
         dbh.db

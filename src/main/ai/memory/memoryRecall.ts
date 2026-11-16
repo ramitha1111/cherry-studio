@@ -5,7 +5,13 @@ import { application } from '@application'
 import { agentSessionService } from '@data/services/AgentSessionService'
 import { loggerService } from '@logger'
 import { buildSearchSnippet } from '@main/utils/searchSnippet'
-import { extractFtsTokens, extractMatchTerms, toFtsLikePattern, toFtsMatchQuery } from '@main/utils/trigramFtsQuery'
+import {
+  extractFtsTokens,
+  extractMatchTerms,
+  extractShortTerms,
+  toFtsLikePattern,
+  toFtsMatchQuery
+} from '@main/utils/trigramFtsQuery'
 
 import { agentMemoryAuthority, assistantMemoryAuthority, type MemoryTurn } from './memoryAuthority'
 import type { MemorySession } from './MemoryService'
@@ -58,16 +64,31 @@ function search(owner: RecallOwner, query: string, target?: MemorySearchInput) {
     : sql`c.assistant_id = ${owner.assistantId} AND m.deleted_at IS NULL`
   const match = toFtsMatchQuery(query)
   const terms = extractFtsTokens(query).slice(0, 16)
+  const shortTerms = extractShortTerms(query).slice(0, 16)
+  const relevanceTerms = [...new Set([...extractMatchTerms(query), ...shortTerms].map((term) => term.toLowerCase()))]
   if (!terms.length && !target?.messageId) return { items: [], truncated: false }
   const condition = target?.messageId
     ? sql`m.id = ${target.messageId} AND ${conversationId} = ${target.conversationId}`
-    : match
-      ? sql`${fts} MATCH ${match}`
-      : sql.join(
-          terms.map((term) => sql`m.searchable_text LIKE ${toFtsLikePattern(term)} ESCAPE '\\'`),
-          sql` AND `
-        )
-  const order = match && !target?.messageId ? sql`bm25(${fts}), m.created_at DESC` : sql`m.created_at DESC`
+    : shortTerms.length
+      ? sql`(${sql.join(
+          [
+            ...(match ? [sql`m.fts_rowid IN (SELECT rowid FROM ${fts} WHERE ${fts} MATCH ${match})`] : []),
+            ...shortTerms.map((term) => sql`m.searchable_text LIKE ${toFtsLikePattern(term)} ESCAPE '\\'`)
+          ],
+          sql` OR `
+        )})`
+      : sql`${fts} MATCH ${match}`
+  const coverage = sql.join(
+    relevanceTerms.map(
+      (term) => sql`CASE WHEN m.searchable_text LIKE ${toFtsLikePattern(term)} ESCAPE '\\' THEN 1 ELSE 0 END`
+    ),
+    sql` + `
+  )
+  const order = target?.messageId
+    ? sql`m.created_at DESC`
+    : shortTerms.length
+      ? sql`(${coverage}) DESC, length(m.searchable_text), m.created_at DESC`
+      : sql`bm25(${fts}), m.created_at DESC`
   const database = application.get('DbService').getDb()
   const currentUserMessageId = owner.assistantMessageId
     ? database.get<{ parentId: string | null }>(sql`
@@ -156,8 +177,7 @@ function search(owner: RecallOwner, query: string, target?: MemorySearchInput) {
       role,
       matchRank: ranks.get(messageId),
       createdAt: new Date(createdAt).toISOString(),
-      text:
-        text.length <= 2000 ? text : buildSearchSnippet(text, match ? extractMatchTerms(query) : terms, 'substring'),
+      text: text.length <= 2000 ? text : buildSearchSnippet(text, relevanceTerms, 'substring'),
       truncated: text.length > 2000
     })),
     truncated: rows.length === 64 || matches.length > 6
