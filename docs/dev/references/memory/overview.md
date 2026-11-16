@@ -176,13 +176,13 @@ Shared clear binds the exact file set and versions before confirmation. It leave
 
 Clearing nonempty content persists empty `forgotten` markers rather than merely deleting all memory state. The store also understands structured `active`, `expired` and `forgotten` entries. Model views exclude forgotten content, matching source-message copies and known derivatives. Current views exclude expired entries; historical views can retain their status and dates. Source-version changes do not lift suppression.
 
-The runtime blocks memory-associated requests when a scope contains expired, forgotten or invalid state, including requests in new persistent conversations. These markers persist across restarts and shared-access changes. Temporary requests without memory remain separate.
+The runtime records each conversation's initial protection-state fingerprint. A later change to expired or forgotten state blocks that conversation's old context, even after restart or disabling shared access. A new conversation without prior history can establish a fresh boundary and use filtered memory. Existing history without a recorded boundary remains blocked when protected state exists. Invalid memory state always blocks requests. Conversation recall retains strict scope checks so a fresh conversation cannot retrieve protected history. Temporary requests without memory remain separate.
 
 Structured scopes pause automatic append and ordinary organization because these operations require whole-file overwrite receipts. Recovery preserves forgotten markers and returns a conflict when restoring protected plaintext would violate them.
 
 ## Legacy FACT and JOURNAL
 
-Private migration backs up FACT and preserves its content, conditions and references before enabling the Agent's private `MEMORY.md` and topics. Unsafe splitting, ambiguous links or partial results leave the original recoverable and the new private scope inactive. Read-only legacy FACT can remain in the prompt until migration succeeds.
+Private migration backs up FACT and preserves its content, conditions and references before enabling the Agent's private `MEMORY.md` and topics. Unsafe splitting, ambiguous links or partial results leave the original recoverable and the new private scope inactive. Read-only legacy FACT remains available until migration succeeds. Runtime safety checks inspect the inactive private scope without requiring successful migration; protected or invalid state still blocks unsafe history.
 
 After migration, FACT and JOURNAL are retained history. Active memory changes use `MEMORY.md` and topics. The identity/legacy editor operates on its original files independently.
 

@@ -174,6 +174,7 @@ export class ClaudeCodeWarmQueryManager extends BaseService {
   private readonly entries = new Map<string, WarmQueryEntry>()
   private readonly consuming = new Map<string, Set<WarmQueryEntry>>()
   private readonly preparingSessions = new Map<string, Set<Promise<void>>>()
+  private readonly prewarming = new Map<string, Promise<void>>()
   private readonly closingQueries = new Map<string, Set<Promise<void>>>()
   private readonly failedClosures = new Map<string, Set<WarmQueryEntry>>()
 
@@ -260,7 +261,11 @@ export class ClaudeCodeWarmQueryManager extends BaseService {
     const guard = openRuntimeMemoryGuard(request.key, () => {
       if (entry) this.closeDetached(request.key, entry)
     })
+    const previous = this.prewarming.get(request.key)
+    const finished = Promise.withResolvers<void>()
+    this.prewarming.set(request.key, finished.promise)
     try {
+      await previous
       await guard.check()
       const { startup } = await import('@anthropic-ai/claude-agent-sdk')
       await guard.check()
@@ -298,6 +303,8 @@ export class ClaudeCodeWarmQueryManager extends BaseService {
       this.refreshIdleTimer(request.key, entry)
     } finally {
       if (!entry) guard.dispose()
+      finished.resolve()
+      if (this.prewarming.get(request.key) === finished.promise) this.prewarming.delete(request.key)
     }
   }
 
@@ -356,6 +363,7 @@ export class ClaudeCodeWarmQueryManager extends BaseService {
     while (this.preparingSessions.has(key)) {
       await Promise.allSettled([...this.preparingSessions.get(key)!])
     }
+    while (this.prewarming.has(key)) await this.prewarming.get(key)
     const entry = this.entries.get(key)
     this.entries.delete(key)
     const retries = [...(this.failedClosures.get(key) ?? [])]
@@ -371,6 +379,7 @@ export class ClaudeCodeWarmQueryManager extends BaseService {
       ...this.entries.keys(),
       ...this.consuming.keys(),
       ...this.preparingSessions.keys(),
+      ...this.prewarming.keys(),
       ...this.closingQueries.keys(),
       ...this.failedClosures.keys()
     ])

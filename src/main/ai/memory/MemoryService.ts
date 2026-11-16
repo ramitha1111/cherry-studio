@@ -10,6 +10,7 @@ import { isMemoryEditor, type MemoryAuthority } from './memoryAuthority'
 import type { MemoryLegacyOriginal, MemoryMutationSource } from './memoryBackups'
 import type { MemoryEntry, MemoryUse } from './memoryEntries'
 import { memoryEntryPreview } from './memoryFiles'
+import { assertMemoryRuntimeState, type MemoryRuntimeOwner } from './memoryRuntimeState'
 import {
   type MemoryAccess,
   type MemoryApproval,
@@ -23,7 +24,7 @@ export interface MemorySession extends Disposable {
   list(): ReturnType<MemoryStore['list']>
   entry(): ReturnType<MemoryStore['entry']>
   validateModelReads(): Promise<void>
-  assertRuntimeSafe(): Promise<void>
+  assertRuntimeSafe(owner?: MemoryRuntimeOwner): Promise<void>
   read(target: string, purpose?: MemoryUse): ReturnType<MemoryStore['read']>
   commit(
     mutations: readonly MemoryMutation[],
@@ -62,11 +63,11 @@ export class MemoryService extends BaseService {
   }
 
   /** One entry snapshot per product conversation and scope, until application restart. */
-  async entrySnapshot(contextId: string, session: MemorySession) {
+  async entrySnapshot(owner: MemoryRuntimeOwner, session: MemorySession) {
     const scope = session.scope
-    const key = JSON.stringify([contextId, scope.kind, scope.kind === 'private' ? scope.agentId : ''])
+    const key = JSON.stringify([owner, scope.kind, scope.kind === 'private' ? scope.agentId : ''])
+    await session.assertRuntimeSafe(owner)
     let pending = this.entrySnapshots.get(key)
-    const cached = !!pending
     if (!pending) {
       pending = session.entry().then(async (snapshot) => {
         await session.validateModelReads()
@@ -78,7 +79,7 @@ export class MemoryService extends BaseService {
       })
     }
     const snapshot = await pending
-    if (cached) await session.assertRuntimeSafe()
+    await session.assertRuntimeSafe(owner)
     return snapshot
   }
 
@@ -110,17 +111,18 @@ export class MemoryService extends BaseService {
         return authority.assertAuthorized()
       }
     }
-    const run = <T>(operation: (store: MemoryStore) => Promise<T>, recovery = false): Promise<T> =>
+    const run = <T>(
+      operation: (store: MemoryStore) => Promise<T>,
+      mode: 'active' | 'inspect' | 'recovery' = 'active'
+    ): Promise<T> =>
       this.work.track(
         (async () => {
           access.assertAuthorized()
-          if (
-            !recovery &&
-            scope.kind === 'private' &&
-            source !== 'migration' &&
-            !(await this.prepareAgent(scope.agentId))
-          )
-            throw new Error('Private memory migration is incomplete; original FACT content is retained')
+          if (mode !== 'recovery' && scope.kind === 'private' && source !== 'migration') {
+            const migrated = await this.prepareAgent(scope.agentId)
+            if (!migrated && mode === 'active')
+              throw new Error('Private memory migration is incomplete; original FACT content is retained')
+          }
           const store = await this.getStore(scope)
           access.assertAuthorized()
           return operation(store)
@@ -160,7 +162,15 @@ export class MemoryService extends BaseService {
         }),
       read,
       validateModelReads,
-      assertRuntimeSafe: () => run((store) => store.assertRuntimeSafe(access)),
+      assertRuntimeSafe: (owner) =>
+        run(
+          (store) =>
+            store.assertRuntimeSafe(
+              access,
+              owner ? (protection) => assertMemoryRuntimeState(owner, scope, protection) : undefined
+            ),
+          'inspect'
+        ),
       commit: (mutations, approve, readReceipts, legacy, managedTargets) =>
         run(async (store) =>
           notify(
@@ -178,12 +188,12 @@ export class MemoryService extends BaseService {
           this.invalidated.fire(scope)
           return notify('clear', await store.clear(access, token, approve))
         }),
-      previewRecovery: () => run((store) => store.previewRecovery(access), true),
+      previewRecovery: () => run((store) => store.previewRecovery(access), 'recovery'),
       recover: (token, approve) =>
         run(async (store) => {
           this.invalidated.fire(scope)
           return notify('recovery', await store.recover(access, token, approve))
-        }, true)
+        }, 'recovery')
     }
   }
 

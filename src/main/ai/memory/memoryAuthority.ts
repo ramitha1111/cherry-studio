@@ -8,10 +8,12 @@ import type { Disposable } from '@main/core/lifecycle'
 import { WindowType } from '@main/core/window/types'
 import type { MemoryScope } from '@shared/types/memory'
 
+import type { MemoryRuntimeOwner } from './memoryRuntimeState'
 import type { MemoryAccess } from './MemoryStore'
 
 export interface MemoryAuthority extends MemoryAccess {
   readonly scope: MemoryScope
+  readonly runtimeOwner?: MemoryRuntimeOwner
   onRevoked?(listener: () => void): Disposable
 }
 

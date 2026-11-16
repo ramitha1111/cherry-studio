@@ -221,6 +221,72 @@ describe('ClaudeCodeWarmQueryManager', () => {
     await expect(offered!.checkMemory()).rejects.toThrow('disposed')
   })
 
+  it('owns only one live process for simultaneous prewarms and closes it', async () => {
+    vi.useRealTimers()
+    const manager = createManager()
+    const gate = createDeferred<void>()
+    const checked = createDeferred<void>()
+    const memory = application.get('MemoryService')
+    const open = vi.mocked(memory.open).getMockImplementation()!
+    let blocked = false
+    vi.spyOn(memory, 'open').mockImplementation((...args) => {
+      const session = open(...args)
+      let checks = 0
+      const check = session.assertRuntimeSafe.bind(session)
+      session.assertRuntimeSafe = async () => {
+        await check()
+        if (++checks === 4 && !blocked) {
+          blocked = true
+          checked.resolve()
+          await gate.promise
+        }
+      }
+      return session
+    })
+    const live = new Set<object>()
+    startupMock.mockImplementation(async () => {
+      const warm = warmQuery()
+      live.add(warm)
+      warm[Symbol.asyncDispose].mockImplementation(async () => {
+        live.delete(warm)
+      })
+      return warm
+    })
+    const request = { key: 'session-1', options: { model: 'sonnet' } }
+    const first = manager.prewarm(request)
+    await checked.promise
+    const second = manager.prewarm(request)
+    // Let the competing request reach the same registration boundary.
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    gate.resolve()
+    await Promise.all([first, second])
+    const liveBeforeClose = live.size
+    await manager.closeAll()
+    expect(liveBeforeClose).toBe(1)
+    expect(live.size).toBe(0)
+    expect(await manager.consume(request)).toBeUndefined()
+  })
+
+  it('drains direct prewarms that have not registered their process when close starts', async () => {
+    const manager = createManager()
+    const live = new Set<object>()
+    startupMock.mockImplementation(async () => {
+      const warm = warmQuery()
+      live.add(warm)
+      warm[Symbol.asyncDispose].mockImplementation(async () => {
+        live.delete(warm)
+      })
+      return warm
+    })
+    const request = { key: 'session-1', options: { model: 'sonnet' } }
+    const preparing = manager.prewarm(request)
+    const closing = manager.closeAll()
+    await Promise.all([preparing, closing])
+    const remaining = live.size
+    await manager.closeAll()
+    expect(remaining).toBe(0)
+  })
+
   it('consumes a matching warm query once', async () => {
     const manager = createManager()
     const warm = warmQuery()

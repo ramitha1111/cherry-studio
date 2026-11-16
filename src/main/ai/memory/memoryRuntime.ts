@@ -40,7 +40,7 @@ export function runtimeMemoryAuthorities(
           }
         }
       })
-    return authorities
+    return authorities.map((authority) => ({ ...authority, runtimeOwner: owner }))
   }
   const assertAuthorized = (): undefined => {
     signal.throwIfAborted()
@@ -53,6 +53,7 @@ export function runtimeMemoryAuthorities(
   return [
     {
       scope: { kind: 'shared' },
+      runtimeOwner: owner,
       assertAuthorized,
       onRevoked: (listener) =>
         assistantDataService.onMemoryAccessRevoked((id) => {
@@ -92,7 +93,7 @@ export function openRuntimeMemoryGuard(agentSessionId: string, cancel: () => voi
     },
     async check() {
       controller.signal.throwIfAborted()
-      for (const session of sessions) await session.assertRuntimeSafe()
+      for (const session of sessions) await session.assertRuntimeSafe({ agentSessionId })
       controller.signal.throwIfAborted()
     },
     dispose() {
@@ -142,7 +143,8 @@ export function memoryRuntimeFetch(
     }
     const check = async () => {
       signal.throwIfAborted()
-      for (const session of sessions) await session.assertRuntimeSafe()
+      for (let index = 0; index < sessions.length; index++)
+        await sessions[index].assertRuntimeSafe(owners[index].runtimeOwner)
       signal.throwIfAborted()
     }
     try {

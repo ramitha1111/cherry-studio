@@ -7,18 +7,24 @@ import path from 'node:path'
 
 import { setupTestDatabase } from '@test-helpers/db'
 import { MockApplicationUtils } from '@test-mocks/main/application'
+import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { application } from '@application'
 import { agentTable } from '@data/db/schemas/agent'
 import { agentChannelSessionTable } from '@data/db/schemas/agentChannel'
 import { agentSessionTable } from '@data/db/schemas/agentSession'
+import { agentSessionMessageTable } from '@data/db/schemas/agentSessionMessage'
 import { agentWorkspaceTable } from '@data/db/schemas/agentWorkspace'
+import { appStateTable } from '@data/db/schemas/appState'
 import { assistantTable } from '@data/db/schemas/assistant'
+import { messageTable } from '@data/db/schemas/message'
 import { topicTable } from '@data/db/schemas/topic'
 import { agentChannelService } from '@data/services/AgentChannelService'
 import { agentService } from '@data/services/AgentService'
+import { agentSessionContextService } from '@data/services/AgentSessionContextService'
 import { assistantDataService } from '@data/services/AssistantService'
+import { prepareClaudeBranch } from '@main/ai/runtime/claudeCode/claudeContext'
 import { createClaudeCodeIdentityHooks } from '@main/ai/runtime/claudeCode/identityHooks'
 import { BaseService, Emitter } from '@main/core/lifecycle'
 import { DEFAULT_ASSISTANT_SETTINGS } from '@shared/data/types/assistant'
@@ -30,7 +36,7 @@ import {
   type MemoryAuthority
 } from '../memoryAuthority'
 import { serializeMemoryEntries } from '../memoryEntries'
-import { openRuntimeMemoryGuard } from '../memoryRuntime'
+import { memoryRuntimeFetch, openRuntimeMemoryGuard, runtimeMemoryAuthorities } from '../memoryRuntime'
 import { MemoryService } from '../MemoryService'
 import type { MemoryApproval } from '../MemoryStore'
 
@@ -77,7 +83,10 @@ describe('lifecycle memory owner', () => {
     const sessionId = randomUUID()
     const workspaceId = randomUUID()
     dbh.db.insert(agentTable).values({ id: agentId, type: 'pi', name: 'A', instructions: '', orderKey: 'a0' }).run()
-    dbh.db.insert(agentWorkspaceTable).values({ id: workspaceId, name: 'W', path: fixture, orderKey: 'a0' }).run()
+    dbh.db
+      .insert(agentWorkspaceTable)
+      .values({ id: workspaceId, name: 'W', path: path.join(fixture, workspaceId), orderKey: 'a0' })
+      .run()
     dbh.db.insert(agentSessionTable).values({ id: sessionId, agentId, workspaceId, name: 'S', orderKey: 'a0' }).run()
     await mkdir(path.join(fixture, 'feature.agents.data', agentId), { recursive: true })
     return { agentId, sessionId }
@@ -134,6 +143,138 @@ describe('lifecycle memory owner', () => {
     await expect(new PiRuntimeConnection(input).start()).rejects.toThrow('isolation')
     await expect(new ClaudeCodeRuntimeDriver().connect(input)).rejects.toThrow('isolation')
     editor.dispose()
+  })
+
+  it.each([true, false])('allows a fresh agent after clear and restart with sharing=%s', async (enabled) => {
+    const { sessionId: oldSessionId } = await seedAgentSession()
+    MockApplicationUtils.setService('MemoryService', service)
+    const editor = service.open(authority())
+    await editor.entry()
+    await fs.writeFile(path.join(fixture, 'feature.memory.data', 'MEMORY.md'), 'OLD_HOME')
+    const old = openRuntimeMemoryGuard(oldSessionId, () => {})
+    await old.check()
+    await editor.clear((await editor.previewClear()).token, approve)
+    old.dispose()
+    editor.dispose()
+    const { sessionId, agentId } = await seedAgentSession()
+    agentService.updateAgent(agentId, { configuration: { shared_memory_enabled: enabled } })
+    const fresh = openRuntimeMemoryGuard(sessionId, () => {})
+    try {
+      await fresh.check()
+    } finally {
+      fresh.dispose()
+    }
+    dbh.db
+      .insert(agentSessionMessageTable)
+      .values({
+        sessionId,
+        role: 'assistant',
+        status: 'success',
+        data: { parts: [{ type: 'text', text: 'New answer' }] }
+      })
+      .run()
+    await service._doStop()
+    BaseService.resetInstances()
+    service = new MemoryService()
+    MockApplicationUtils.setService('MemoryService', service)
+    const resumed = openRuntimeMemoryGuard(sessionId, () => {})
+    const stale = openRuntimeMemoryGuard(oldSessionId, () => {})
+    try {
+      await resumed.check()
+      await expect(stale.check()).rejects.toThrow('isolation')
+    } finally {
+      resumed.dispose()
+      stale.dispose()
+    }
+  })
+
+  it.each([true, false])('allows a fresh assistant after clear with sharing=%s', async (enabled) => {
+    MockApplicationUtils.setService('MemoryService', service)
+    const editor = service.open(authority())
+    await editor.entry()
+    await fs.writeFile(path.join(fixture, 'feature.memory.data', 'MEMORY.md'), 'OLD_HOME')
+    await editor.clear((await editor.previewClear()).token, approve)
+    editor.dispose()
+    const assistantId = randomUUID()
+    const topicId = randomUUID()
+    dbh.db
+      .insert(assistantTable)
+      .values({
+        id: assistantId,
+        name: 'A',
+        emoji: '',
+        prompt: '',
+        settings: { ...DEFAULT_ASSISTANT_SETTINGS, enableSharedMemory: enabled },
+        orderKey: 'a0'
+      })
+      .run()
+    dbh.db.insert(topicTable).values({ id: topicId, assistantId, orderKey: 'a0' }).run()
+    const rootId = randomUUID()
+    const userId = randomUUID()
+    const replyId = randomUUID()
+    dbh.db
+      .insert(messageTable)
+      .values({ id: rootId, topicId, role: 'root', status: 'success', data: { parts: [] } })
+      .run()
+    dbh.db
+      .insert(messageTable)
+      .values({
+        id: userId,
+        parentId: rootId,
+        topicId,
+        role: 'user',
+        status: 'success',
+        data: { parts: [{ type: 'text', text: 'Hello' }] }
+      })
+      .run()
+    dbh.db
+      .insert(messageTable)
+      .values({ id: replyId, parentId: userId, topicId, role: 'assistant', status: 'pending', data: { parts: [] } })
+      .run()
+    const transport = memoryRuntimeFetch(
+      async () => Response.json({ answer: 'OK' }),
+      (signal) => runtimeMemoryAuthorities({ topicId, assistantId }, signal)
+    )
+    expect(await (await transport('https://test.invalid')).json()).toEqual({ answer: 'OK' })
+    await service._doStop()
+    BaseService.resetInstances()
+    service = new MemoryService()
+    MockApplicationUtils.setService('MemoryService', service)
+    expect(await (await transport('https://test.invalid')).json()).toEqual({ answer: 'OK' })
+    // Older installs may retain only a compaction summary and have no isolation record.
+    dbh.db.delete(appStateTable).run()
+    dbh.db.update(messageTable).set({ compactionSummary: 'OLD_HOME' }).where(eq(messageTable.id, userId)).run()
+    await expect(transport('https://test.invalid')).rejects.toThrow('isolation')
+  })
+
+  it.each(['reply', 'native', 'resume-token'] as const)('rejects unrecorded old Agent %s history', async (kind) => {
+    const { sessionId } = await seedAgentSession()
+    if (kind === 'native') {
+      const context = prepareClaudeBranch(sessionId, fixture, 'old-native')
+      agentSessionContextService.bindContext(context.id, 'old-native')
+    } else
+      dbh.db
+        .insert(agentSessionMessageTable)
+        .values({
+          sessionId,
+          role: kind === 'reply' ? 'assistant' : 'user',
+          runtimeResumeToken: kind === 'resume-token' ? 'old-native' : null,
+          status: 'success',
+          data: { parts: [{ type: 'text', text: 'OLD_HOME' }] }
+        })
+        .run()
+    MockApplicationUtils.setService('MemoryService', service)
+    const editor = service.open(authority())
+    await editor.entry()
+    await fs.writeFile(path.join(fixture, 'feature.memory.data', 'MEMORY.md'), 'OLD_HOME')
+    await editor.clear((await editor.previewClear()).token, approve)
+    editor.dispose()
+    const guard = openRuntimeMemoryGuard(sessionId, () => {})
+    try {
+      await expect(guard.check()).rejects.toThrow('isolation')
+    } finally {
+      guard.dispose()
+    }
   })
 
   it.each(['disable', 'owner'] as const)(

@@ -73,7 +73,7 @@ Assistants search only their own topics. Agents search only their own desktop ma
 Shared-memory settings show the latest run result and provide **Restore backup** and **Clear global memory**. Both actions require confirmation. Clearing affects only shared-memory content and preserves Agent-private memory, legacy files and existing backups.
 
 {% hint style="warning" %}
-Clearing nonempty memory retains forgetting markers and blocks related memory requests, including new persistent conversations. The markers persist across restarts and shared-access changes; expired or invalid state also triggers blocking. If recovery encounters later edits or forgetting markers, it reports a conflict and preserves the current state.
+Clearing nonempty memory retains forgetting markers. Conversations that may contain old memory remain blocked after restart or disabling shared access. You can start a new conversation to continue chatting with filtered memory. Changes to expired state or invalid state also trigger protection. If recovery encounters later edits or forgetting markers, it reports a conflict and preserves the current state.
 {% endhint %}
 
 The Agent's **Memory** tab shows the identity files `SOUL.md` and `USER.md`, legacy `memory/FACT.md`, and read-only `memory/JOURNAL.jsonl`. Active memory uses `MEMORY.md` and `.memories/` topics. After FACT migration succeeds, edits in the legacy tab affect only the retained FACT file. JOURNAL is kept as history.

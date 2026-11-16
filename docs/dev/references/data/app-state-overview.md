@@ -8,6 +8,7 @@ sources:
   - src/main/ai/memory/MemoryMigrationService.ts
   - src/main/ai/memory/memoryDreamingState.ts
   - src/main/ai/memory/memoryExtraction.ts
+  - src/main/ai/memory/memoryRuntimeState.ts
 ---
 
 # App State System Overview
@@ -87,6 +88,7 @@ Every key currently in `app_state`. Add a row when introducing a key.
 | `memory:migration:<agentId>` | `MemoryMigrationService` | `{ version, status, sourceHash, files, backupId?, error? }` | Private FACT cutover marker. Files contain paths and before/after hashes, never bodies. Complete only after preservation checks; partial results remain inactive and are not replayed. |
 | `memory:dreaming:<scope>` | `MemoryDreamingService` via `memoryDreamingState` | `{ version, scope, generation, files, cursor, manual, manualAttempts, cancelled, lastScanAt, lastRunAt?, lastResult?, status, reason? }` | Per-file observed/processed hashes, first pending time, controlled-change count, revision, bounded attempts, retry time, and last completed/failed/cancelled result. No bodies, model outputs, or chat history. Job history is not the progress owner. |
 | `memory:extraction:<kind>/<conversationId>` | `MemoryDreamingService` via `memoryExtraction` | `{ createdAt, messageId, hash, outcome }` | Last admitted source cursor; no message bodies. Admission advances the cursor, including overflow/failure, to prevent replay. Pending references are ephemeral and discarded on restart; no historical scan resumes them. |
+| `memory:runtime:<conversation-and-scope>` | `memoryRuntimeState` | `{ version, protection }` | Initial memory isolation boundary. Stores only a protection-state fingerprint. Requests cannot overwrite it to accept stale history; missing records with protected state require a fresh conversation. |
 
 ## Related Source Code
 

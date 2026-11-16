@@ -10,10 +10,11 @@ import {
   type MemoryAuthority,
   type MemoryTurn
 } from './memoryAuthority'
+import type { MemoryRuntimeOwner } from './memoryRuntimeState'
 
 const logger = loggerService.withContext('MemoryPrompt')
 
-async function entry(contextId: string, createAuthority: () => MemoryAuthority) {
+async function entry(owner: MemoryRuntimeOwner, createAuthority: () => MemoryAuthority) {
   let authority: MemoryAuthority
   try {
     authority = createAuthority()
@@ -22,7 +23,7 @@ async function entry(contextId: string, createAuthority: () => MemoryAuthority) 
   }
   const session = application.get('MemoryService').open(authority)
   try {
-    const snapshot = await application.get('MemoryService').entrySnapshot(contextId, session)
+    const snapshot = await application.get('MemoryService').entrySnapshot(owner, session)
     authority.assertAuthorized()
     const root =
       authority.scope.kind === 'shared'
@@ -89,8 +90,8 @@ export async function agentMemoryReference(
     isHeadless: () => interaction.currentTurn !== 'interactive'
   }
   const entries = await Promise.all([
-    entry(`agent:${sessionId}`, () => agentMemoryAuthority(sessionId, 'shared', turn)),
-    entry(`agent:${sessionId}`, () => agentMemoryAuthority(sessionId, 'private', turn))
+    entry({ agentSessionId: sessionId }, () => agentMemoryAuthority(sessionId, 'shared', turn)),
+    entry({ agentSessionId: sessionId }, () => agentMemoryAuthority(sessionId, 'private', turn))
   ])
   try {
     signal?.throwIfAborted()
@@ -104,9 +105,5 @@ export async function assistantMemoryReference(
   context: { topicId: string; assistantId: string },
   turn: MemoryTurn
 ): Promise<string> {
-  return reference([
-    await entry(`assistant:${context.assistantId}:${context.topicId}`, () =>
-      assistantMemoryAuthority({ kind: 'conversation', ...context }, turn)
-    )
-  ])
+  return reference([await entry(context, () => assistantMemoryAuthority({ kind: 'conversation', ...context }, turn))])
 }

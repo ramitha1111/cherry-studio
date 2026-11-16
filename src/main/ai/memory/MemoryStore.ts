@@ -184,20 +184,25 @@ export class MemoryStore {
     }
   }
 
-  /** Native transcripts have no per-fragment memory provenance yet. */
-  async assertRuntimeSafe(access: MemoryAccess): Promise<void> {
+  /** Native transcripts require a stable boundary for protected memory states. */
+  async assertRuntimeSafe(access: MemoryAccess, assertHistory?: (protection: string | null) => void): Promise<void> {
     access.assertAuthorized()
     const generation = this.generation
     const snapshot = await this.entrySnapshot()
     const files = new Map([...snapshot].map(([name, bytes]) => [name, bytes ? this.decode(bytes) : '']))
     memoryModelView(files, 'MEMORY.md', 'current')
-    if (
-      [...files.values()].some((text) => entriesIn(parseMemoryEntries(text)).some((entry) => entry.status !== 'active'))
-    )
-      throw new MemoryError('conflict', 'Memory history requires isolation before this runtime can continue')
+    const protectedEntries = [...files.values()]
+      .flatMap((text) => entriesIn(parseMemoryEntries(text)))
+      .filter((entry) => entry.status !== 'active')
+      .map((entry) => JSON.stringify(entry))
+      .sort()
     await this.assertEntrySnapshot(snapshot)
     access.assertAuthorized()
     this.assertGeneration(generation)
+    const protection = protectedEntries.length ? memoryHash(Buffer.from(JSON.stringify(protectedEntries))) : null
+    if (assertHistory) assertHistory(protection)
+    else if (protection)
+      throw new MemoryError('conflict', 'Memory history requires isolation before this runtime can continue')
   }
 
   async read(access: MemoryAccess, target: string): Promise<MemoryRead> {
