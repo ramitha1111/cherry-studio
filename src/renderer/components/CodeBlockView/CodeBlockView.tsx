@@ -171,6 +171,7 @@ export const CodeBlockView: React.FC<Props> = memo((props) => {
 
   const sourceViewRef = useRef<CodeEditorHandles>(null)
   const specialViewRef = useRef<BasicPreviewHandles>(null)
+  const [previewFailed, setPreviewFailed] = useState(false)
   const latestActionContextRef = useRef({ source, stateRef: document.stateRef, language, t })
 
   useLayoutEffect(() => {
@@ -281,7 +282,9 @@ export const CodeBlockView: React.FC<Props> = memo((props) => {
   }, [codeExecutionTimeoutMinutes])
 
   const showPreviewTools =
-    Boolean(specialViewDefinition?.supportsImageActions) && (viewMode === 'special' || viewMode === 'split')
+    Boolean(specialViewDefinition?.supportsImageActions) &&
+    !previewFailed &&
+    (viewMode === 'special' || viewMode === 'split')
 
   const handleToggleExpanded = useCallback(() => setExpandOverride((current) => !current), [])
   const handleToggleWrapped = useCallback(() => setWrapOverride((current) => !current), [])
@@ -419,7 +422,8 @@ export const CodeBlockView: React.FC<Props> = memo((props) => {
         <SpecialView
           ref={specialViewDefinition.supportsImageActions ? specialViewRef : undefined}
           enableToolbar={codeImageTools}
-          isStreaming={isStreaming}>
+          isStreaming={isStreaming}
+          onErrorChange={specialViewDefinition.supportsImageActions ? setPreviewFailed : undefined}>
           {source}
         </SpecialView>
       </Suspense>
