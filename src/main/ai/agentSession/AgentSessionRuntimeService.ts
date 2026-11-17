@@ -1,11 +1,9 @@
 import { type Span, SpanStatusCode } from '@opentelemetry/api'
 import { isToolUIPart, type UIMessageChunk } from 'ai'
-import { eq } from 'drizzle-orm'
 import { v7 as uuidv7 } from 'uuid'
 
 import { application } from '@application'
 import type { InputState, ThreadContextUsage } from '@cherrystudio/agent-runtime'
-import { agentSessionTable } from '@data/db/schemas/agentSession'
 import type { DbOrTx } from '@data/db/types'
 import { agentService } from '@data/services/AgentService'
 import { agentSessionContextService as childContexts } from '@data/services/AgentSessionContextService'
@@ -2642,7 +2640,7 @@ export class AgentSessionRuntimeService extends BaseService {
         const epoch = entry.contextUsageEpoch
         const turn = this.currentTurn(entry)
         const captured = {
-          identity: this.captureContextUsageIdentity(entry.sessionId),
+          identity: this.captureContextUsageIdentity(entry.sessionId, entry.modelId),
           turnAssistantMessageId: turn?.assistantMessageId,
           turnId: turn?.turnId
         }
@@ -2673,7 +2671,7 @@ export class AgentSessionRuntimeService extends BaseService {
       pending.turnId !== turnId
     )
       return
-    const identity = this.captureContextUsageIdentity(entry.sessionId)
+    const identity = this.captureContextUsageIdentity(entry.sessionId, entry.modelId)
     if (
       !identity ||
       identity.headMessageId !== assistantMessageId ||
@@ -2681,7 +2679,12 @@ export class AgentSessionRuntimeService extends BaseService {
       identity.contextId !== pending.identity.contextId
     )
       return
-    const head = agentSessionMessageService.getSessionMessage(entry.sessionId, identity.headMessageId)
+    let head: AgentSessionMessageEntity
+    try {
+      head = agentSessionMessageService.getSessionMessage(entry.sessionId, identity.headMessageId)
+    } catch {
+      return
+    }
     if (head.role !== 'assistant' || head.status !== 'success') return
     agentSessionService.setContextUsageSnapshot(entry.sessionId, {
       ...identity,
@@ -2692,13 +2695,14 @@ export class AgentSessionRuntimeService extends BaseService {
   }
 
   private captureContextUsageIdentity(
-    sessionId: string
+    sessionId: string,
+    modelId?: UniqueModelId
   ): Omit<AgentSessionContextUsageSnapshot, 'measuredAt' | 'usage'> | undefined {
     try {
       const session = agentSessionService.getById(sessionId)
       if (!session.agentId) return
       const agent = agentService.getAgent(session.agentId)
-      const effectiveModel = session.model ?? agent?.model
+      const effectiveModel = modelId ?? session.model ?? agent?.model
       if (!effectiveModel || !modelService.existsByIdTx(application.get('DbService').getDb(), effectiveModel)) return
       const headMessageId = agentSessionMessageService.captureHead(sessionId)
       const head = agentSessionMessageService.getSessionMessage(sessionId, headMessageId)
@@ -2767,7 +2771,7 @@ export class AgentSessionRuntimeService extends BaseService {
       turnAssistantMessageId?: string
       turnId?: string
     } = {
-      identity: this.captureContextUsageIdentity(entry.sessionId),
+      identity: this.captureContextUsageIdentity(entry.sessionId, entry.modelId),
       turnAssistantMessageId: this.currentTurn(entry)?.assistantMessageId,
       turnId: this.currentTurn(entry)?.turnId
     }
@@ -2778,21 +2782,11 @@ export class AgentSessionRuntimeService extends BaseService {
       const session = agentSessionService.getById(entry.sessionId)
       const agent = session?.agentId ? agentService.getAgent(session.agentId) : undefined
       const effectiveModel = session?.model ?? agent?.model
-      if (!effectiveModel || effectiveModel !== entry.modelId) return
-      if (agent?.model !== entry.modelId) {
-        const row = application
-          .get('DbService')
-          .getDb()
-          .select({ type: agentSessionTable.type })
-          .from(agentSessionTable)
-          .where(eq(agentSessionTable.id, entry.sessionId))
-          .get()
-        if (row?.type === 'background') return
-      }
+      if (!agent || (entry.modelId !== agent.model && entry.modelId !== effectiveModel)) return
     } catch {
       return
     }
-    const identity = this.captureContextUsageIdentity(entry.sessionId)
+    const identity = this.captureContextUsageIdentity(entry.sessionId, entry.modelId)
     const connection = this.currentConnection(entry)
     const cache = application.get('CacheService')
     if (result.status !== 'confirmed' || !result.value.used) this.invalidateContextUsage(entry)

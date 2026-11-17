@@ -283,6 +283,82 @@ describe('root context snapshot restoration', () => {
     })
   })
 
+  it('publishes and settles a headless reading on the agent default while the session overrides the model', async () => {
+    dbh.db
+      .insert(userModelTable)
+      .values({
+        id: 'test::override',
+        providerId: 'test',
+        modelId: 'override',
+        name: 'Override',
+        capabilities: [],
+        supportsStreaming: true,
+        orderKey: 'a1'
+      })
+      .run()
+    dbh.db.update(agentSessionTable).set({ model: 'test::override' }).where(eq(agentSessionTable.id, 'session')).run()
+    const service = freshService()
+    const entry = attach(
+      service,
+      vi.fn(async () => ({ status: 'confirmed', value: snapshot.usage }))
+    )
+    const n = messages.saveMessage({
+      sessionId: 'session',
+      message: { role: 'assistant', status: 'pending', data: { parts: [] } }
+    })
+    const turn = { ...turnFor(n.id), headless: true }
+    entry.runtimeState.execution = createAgentSessionRuntimeState(turn).execution
+    write(null)
+    service['refreshContextUsage'](entry as never)
+    await vi.waitFor(() =>
+      expect((entry as unknown as { contextUsageRefresh?: unknown }).contextUsageRefresh).toBeUndefined()
+    )
+    expect(cache().getShared(KEY)).toEqual({
+      modelId: 'test::model',
+      result: { status: 'confirmed', value: snapshot.usage }
+    })
+    expect(read()).toBeNull()
+    await persistAssistant(service, entry, n.id, turn)
+    expect(read()).toMatchObject({ modelId: 'test::model', headMessageId: n.id, usage: snapshot.usage })
+    cache().deleteShared(KEY)
+    freshService()['restoreContextUsageSnapshot']('session')
+    expect(cache().getShared(KEY)).toBeUndefined()
+    expect(read()).toBeNull()
+  })
+
+  it('does not fail the turn when the head row disappears before settlement', async () => {
+    const service = freshService()
+    const entry = attach(service)
+    const n = messages.saveMessage({
+      sessionId: 'session',
+      message: { role: 'assistant', status: 'pending', data: { parts: [] } }
+    })
+    const turn = turnFor(n.id)
+    entry.runtimeState.execution = createAgentSessionRuntimeState(turn).execution
+    write(null)
+    service['persistContextUsage'](entry as never, { status: 'confirmed', value: snapshot.usage })
+    expect(entry.contextUsageReading).toBeDefined()
+    const captureIdentity = service['captureContextUsageIdentity'].bind(service)
+    vi.spyOn(
+      service as unknown as { captureContextUsageIdentity: typeof captureIdentity },
+      'captureContextUsageIdentity'
+    ).mockImplementationOnce((...args) => {
+      const identity = captureIdentity(...args)
+      expect(identity?.headMessageId).toBe(n.id)
+      messages.deleteSessionMessage('session', n.id)
+      return identity
+    })
+    const listener = service['createPersistenceListener'](entry as never, turn as never)
+    const result = {
+      modelId: snapshot.modelId,
+      error: { name: 'Error', message: 'Turn failed' },
+      finalMessage: { id: n.id, role: 'assistant', parts: [{ type: 'text', text: 'Partial answer' }] }
+    } as Parameters<NonNullable<typeof listener.onError>>[0]
+    await expect(listener.onError(result)).resolves.toBeUndefined()
+    expect(result.persistence?.status).toBe('saved')
+    expect(read()).toBeNull()
+  })
+
   it('does not save a pending reading when its producing turn fails', async () => {
     const service = freshService()
     const entry = attach(
