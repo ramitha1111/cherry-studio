@@ -1,9 +1,11 @@
 import { type Span, SpanStatusCode } from '@opentelemetry/api'
 import { isToolUIPart, type UIMessageChunk } from 'ai'
+import { eq } from 'drizzle-orm'
 import { v7 as uuidv7 } from 'uuid'
 
 import { application } from '@application'
 import type { InputState, ThreadContextUsage } from '@cherrystudio/agent-runtime'
+import { agentSessionTable } from '@data/db/schemas/agentSession'
 import type { DbOrTx } from '@data/db/types'
 import { agentService } from '@data/services/AgentService'
 import { agentSessionContextService as childContexts } from '@data/services/AgentSessionContextService'
@@ -2679,6 +2681,8 @@ export class AgentSessionRuntimeService extends BaseService {
       identity.contextId !== pending.identity.contextId
     )
       return
+    const head = agentSessionMessageService.getSessionMessage(entry.sessionId, identity.headMessageId)
+    if (head.role !== 'assistant' || head.status !== 'success') return
     agentSessionService.setContextUsageSnapshot(entry.sessionId, {
       ...identity,
       measuredAt: pending.measuredAt,
@@ -2694,13 +2698,14 @@ export class AgentSessionRuntimeService extends BaseService {
       const session = agentSessionService.getById(sessionId)
       if (!session.agentId) return
       const agent = agentService.getAgent(session.agentId)
-      if (!agent?.model || !modelService.existsByIdTx(application.get('DbService').getDb(), agent.model)) return
+      const effectiveModel = session.model ?? agent?.model
+      if (!effectiveModel || !modelService.existsByIdTx(application.get('DbService').getDb(), effectiveModel)) return
       const headMessageId = agentSessionMessageService.captureHead(sessionId)
       const head = agentSessionMessageService.getSessionMessage(sessionId, headMessageId)
       const context = childContexts.branchTx(application.get('DbService').getDb(), sessionId, headMessageId)
       if (!context || context.parentContextId || context.bindingState !== 'bound' || !context.nativeThreadId) return
       return {
-        modelId: agent.model,
+        modelId: effectiveModel,
         // The context ID identifies its backend and native thread.
         contextId: context.id,
         headMessageId,
@@ -2771,7 +2776,19 @@ export class AgentSessionRuntimeService extends BaseService {
     if (entry.contextUsageModel !== entry.modelId) return
     try {
       const session = agentSessionService.getById(entry.sessionId)
-      if (!session?.agentId || agentService.getAgent(session.agentId)?.model !== entry.modelId) return
+      const agent = session?.agentId ? agentService.getAgent(session.agentId) : undefined
+      const effectiveModel = session?.model ?? agent?.model
+      if (!effectiveModel || effectiveModel !== entry.modelId) return
+      if (agent?.model !== entry.modelId) {
+        const row = application
+          .get('DbService')
+          .getDb()
+          .select({ type: agentSessionTable.type })
+          .from(agentSessionTable)
+          .where(eq(agentSessionTable.id, entry.sessionId))
+          .get()
+        if (row?.type === 'background') return
+      }
     } catch {
       return
     }

@@ -242,6 +242,74 @@ describe('root context snapshot restoration', () => {
     } as never)
   }
 
+  it('publishes, saves and restores a reading for the session model override', async () => {
+    const override = 'test::override'
+    dbh.db
+      .insert(userModelTable)
+      .values({
+        id: override,
+        providerId: 'test',
+        modelId: 'override',
+        name: 'Override',
+        capabilities: [],
+        supportsStreaming: true,
+        orderKey: 'a1'
+      })
+      .run()
+    dbh.db.update(agentSessionTable).set({ model: override }).where(eq(agentSessionTable.id, 'session')).run()
+    const service = freshService()
+    const entry = attach(
+      service,
+      vi.fn(async () => ({ status: 'confirmed', value: snapshot.usage }))
+    )
+    entry.modelId = override
+    entry.contextUsageModel = override
+    write(null)
+    service['refreshContextUsage'](entry as never)
+    await vi.waitFor(() =>
+      expect((entry as unknown as { contextUsageRefresh?: unknown }).contextUsageRefresh).toBeUndefined()
+    )
+    expect(cache().getShared(KEY)).toEqual({
+      modelId: override,
+      result: { status: 'confirmed', value: snapshot.usage }
+    })
+    expect(read()).toMatchObject({ modelId: override, usage: snapshot.usage })
+    cache().deleteShared(KEY)
+    await freshService().primeConnection('session')
+    expect(cache().getShared(KEY)).toMatchObject({
+      modelId: override,
+      result: { status: 'confirmed', value: snapshot.usage },
+      snapshot: { restored: true }
+    })
+  })
+
+  it('does not save a pending reading when its producing turn fails', async () => {
+    const service = freshService()
+    const entry = attach(
+      service,
+      vi.fn(async () => ({ status: 'confirmed', value: snapshot.usage }))
+    )
+    const n = messages.saveMessage({
+      sessionId: 'session',
+      message: { role: 'assistant', status: 'pending', data: { parts: [] } }
+    })
+    const turn = turnFor(n.id)
+    entry.runtimeState.execution = createAgentSessionRuntimeState(turn).execution
+    write(null)
+    service['refreshContextUsage'](entry as never)
+    await vi.waitFor(() => expect(entry.contextUsageReading).toBeDefined())
+    expect(cache().getShared(KEY)?.result).toEqual({ status: 'confirmed', value: snapshot.usage })
+    expect(read()).toBeNull()
+    const listener = service['createPersistenceListener'](entry as never, turn as never)
+    await listener.onError({
+      modelId: snapshot.modelId,
+      error: { name: 'Error', message: 'Turn failed' },
+      finalMessage: { id: n.id, role: 'assistant', parts: [{ type: 'text', text: 'Partial answer' }] }
+    } as never)
+    expect(messages.getSessionMessage('session', n.id).status).toBe('error')
+    expect(read()).toBeNull()
+  })
+
   it('publishes, saves and restores when the read resolves after assistant persistence', async () => {
     const service = freshService()
     const deferred = Promise.withResolvers<unknown>()
